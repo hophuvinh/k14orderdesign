@@ -166,8 +166,42 @@ async function clearPendingState(userId) {
   await supabase.from('pending_states').delete().eq('user_id', userId);
 }
 
+// ── ORDER PERMISSIONS ─────────────────────────────────────────
+async function isAllowedToOrder(userId) {
+  const { data } = await supabase
+    .from('order_permissions')
+    .select('user_id')
+    .eq('user_id', userId.toString())
+    .single();
+  return !!data;
+}
+
+async function getOrderPermissions() {
+  const { data } = await supabase
+    .from('order_permissions')
+    .select('*')
+    .order('added_at');
+  return data || [];
+}
+
+async function addOrderPermission(userId, userName) {
+  await supabase
+    .from('order_permissions')
+    .upsert([{ user_id: userId.toString(), user_name: userName }]);
+}
+
+async function removeOrderPermission(userId) {
+  const { data } = await supabase
+    .from('order_permissions')
+    .delete()
+    .eq('user_id', userId.toString())
+    .select();
+  return data && data.length > 0;
+}
+
 module.exports = {
   createOrder, getOrder, updateOrder, getOrdersByDesigner, getMonthlySummary,
   getProducts, getProductById, addProduct, updateProductPrice, deleteProduct,
   getNextSeq, setPendingState, getPendingState, clearPendingState,
+  isAllowedToOrder, getOrderPermissions, addOrderPermission, removeOrderPermission,
 };

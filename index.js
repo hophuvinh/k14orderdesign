@@ -48,6 +48,10 @@ bot.on('message', async (msg) => {
       case '/gia':        await handlers.cmdListProducts(ctx); break;
       case '/mytasks':    await handlers.cmdMyOrders(ctx); break;
       case '/order_info': await handlers.cmdOrderInfo(ctx, text); break;
+      case '/them_quyen':  await handlers.cmdAddPermission(ctx, text); break;
+      case '/xoa_quyen':  await handlers.cmdRemovePermission(ctx, text); break;
+      case '/ds_quyen':   await handlers.cmdListPermissions(ctx); break;
+      case '/myid':       handlers.cmdMyId(ctx); break;
       case '/start':
       case '/help':       handlers.cmdHelp(ctx); break;
     }

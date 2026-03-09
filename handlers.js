@@ -7,24 +7,33 @@ const GROUP_DESIGN_ID = process.env.GROUP_DESIGN_ID;
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim());
 
 function isAdmin(userId) { return ADMIN_IDS.includes(userId.toString()); }
+async function canOrder(userId) {
+  if (isAdmin(userId)) return true;
+  return await db.isAllowedToOrder(userId.toString());
+}
 function fmt(n) { return Number(n).toLocaleString('vi-VN'); }
 
 // ── /help ─────────────────────────────────────────────────────
 function cmdHelp(ctx) {
   const adminBlock = isAdmin(ctx.user.id)
-    ? `\n<b>── Admin ──</b>\n/them_sp [tên] [giá] — Thêm loại sản phẩm\n/sua_gia [tên] [giá mới] — Sửa đơn giá\n/xoa_sp [tên] — Xóa loại sản phẩm\n/san_pham — Danh sách &amp; đơn giá`
+    ? `\n<b>── Admin ──</b>\n/them_sp [tên] [giá] — Thêm loại sản phẩm\n/sua_gia [tên] [giá mới] — Sửa đơn giá\n/xoa_sp [tên] — Xóa loại sản phẩm\n/san_pham — Danh sách &amp; đơn giá\n\n<b>── Quyền order ──</b>\n/them_quyen [user_id] [tên] — Cấp quyền order\n/xoa_quyen [user_id] — Thu hồi quyền\n/ds_quyen — Danh sách người có quyền`
     : '';
   ctx.send(
     `🤖 <b>Design Order Bot</b>\n\n` +
     `<b>── Người order ──</b>\n/order [nội dung] — Tạo order mới\n/order_info [ID] — Xem chi tiết\n\n` +
     `<b>── Designer ──</b>\n/xong [ORDER_ID] [link] — Báo hoàn thành phần của mình\n/mytasks — Xem order đang nhận\n\n` +
-    `<b>── Biên tập viên ──</b>\n/publish [ORDER_ID] [link bài] — Xác nhận đăng bài\n/xacnhan [ORDER_ID] — Xác nhận không cần link` +
+    `<b>── Biên tập viên ──</b>\n/publish [ORDER_ID] [link bài] — Xác nhận đăng bài\n/xacnhan [ORDER_ID] — Xác nhận không cần link\n\n` +
+    `<b>── Khác ──</b>\n/myid — Xem Telegram ID của bạn` +
     adminBlock
   );
 }
 
 // ── /order ────────────────────────────────────────────────────
 async function cmdOrder(ctx, text) {
+  if (!await canOrder(ctx.user.id)) {
+    ctx.send('⛔ Bạn chưa được cấp quyền tạo order.\nLiên hệ admin để được cấp quyền.');
+    return;
+  }
   const content = text.replace(/^\/order\s*/i, '').trim();
   if (!content) {
     ctx.send('⚠️ Nhập nội dung order.\nVD: <code>/order Banner homepage 8/3, deadline 7/3 17h, file tại https://drive.google.com/...</code>');
@@ -140,10 +149,12 @@ async function cmdDone(ctx, text) {
 
   if (allDone) {
     const links = contributors.filter(c => c.link).map(c => `• ${c.name}: ${c.link}`).join('\n');
-    ctx.bot.sendMessage(order.requester_id,
+    // Thông báo vào GROUP để người order xác nhận
+    const mention = `<a href="tg://user?id=${order.requester_id}">${order.requester_name}</a>`;
+    ctx.bot.sendMessage(GROUP_DESIGN_ID,
       `🎉 <b>Order #${orderId} đã hoàn thành thiết kế!</b>\n\n` +
       (links ? `🔗 Link sản phẩm:\n${links}\n\n` : '') +
-      `Sau khi bài đăng, dùng: <code>/publish ${orderId} [link bài]</code>`,
+      `${mention} vui lòng xác nhận để chốt nghiệm thu.`,
       {
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[
@@ -190,9 +201,17 @@ async function startReviewFlow(bot, orderId) {
 
   if (!contributors.length) return;
   if (!products.length) {
-    bot.sendMessage(order.requester_id, '⚠️ Chưa có danh sách sản phẩm. Admin dùng /them_sp để thêm.', { parse_mode: 'HTML' });
+    bot.sendMessage(GROUP_DESIGN_ID, '⚠️ Chưa có danh sách sản phẩm. Admin dùng /them_sp để thêm.', { parse_mode: 'HTML' });
     return;
   }
+
+  // Thông báo vào GROUP trước
+  const designerMentions = contributors.map(c => `<a href="tg://user?id=${c.id}">${c.name}</a>`).join(', ');
+  bot.sendMessage(GROUP_DESIGN_ID,
+    `🔔 <b>Nghiệm thu order #${orderId}</b>\n\n` +
+    `${designerMentions} vui lòng kiểm tra tin nhắn riêng từ bot để xác nhận sản phẩm đã làm.`,
+    { parse_mode: 'HTML' }
+  );
 
   for (const c of contributors) {
     await db.setPendingState(c.id, {
@@ -372,6 +391,41 @@ async function cmdOrderInfo(ctx, text) {
   ctx.send(formatOrderDetail(order, JSON.parse(order.contributors || '[]')));
 }
 
+// ── QUẢN LÝ QUYỀN ORDER ───────────────────────────────────────
+async function cmdAddPermission(ctx, text) {
+  if (!isAdmin(ctx.user.id)) { ctx.send('⛔ Chỉ admin mới dùng được lệnh này.'); return; }
+  const m = text.replace(/^\/them_quyen\s*/i, '').trim().match(/^(\d+)\s+(.+)$/);
+  if (!m) {
+    ctx.send('⚠️ Cú pháp: <code>/them_quyen [user_id] [tên]</code>\nVD: <code>/them_quyen 123456789 Nguyễn Văn A</code>\n\n💡 Người dùng nhắn /myid cho bot để lấy user ID.');
+    return;
+  }
+  await db.addOrderPermission(m[1], m[2].trim());
+  ctx.send(`✅ Đã cấp quyền order cho <b>${m[2].trim()}</b>\nUser ID: <code>${m[1]}</code>`);
+}
+
+async function cmdRemovePermission(ctx, text) {
+  if (!isAdmin(ctx.user.id)) { ctx.send('⛔ Chỉ admin.'); return; }
+  const userId = text.replace(/^\/xoa_quyen\s*/i, '').trim();
+  if (!userId) { ctx.send('⚠️ Cú pháp: <code>/xoa_quyen [user_id]</code>'); return; }
+  const ok = await db.removeOrderPermission(userId);
+  ctx.send(ok ? `✅ Đã xóa quyền order của user <code>${userId}</code>` : `❌ Không tìm thấy user <code>${userId}</code> trong danh sách.`);
+}
+
+async function cmdListPermissions(ctx) {
+  if (!isAdmin(ctx.user.id)) { ctx.send('⛔ Chỉ admin.'); return; }
+  const perms = await db.getOrderPermissions();
+  if (!perms.length) {
+    ctx.send('📭 Chưa có ai được cấp quyền order (ngoài admin).\n\nDùng /them_quyen [user_id] [tên] để thêm.');
+    return;
+  }
+  const list = perms.map((p, i) => `${i+1}. <b>${p.user_name}</b> — <code>${p.user_id}</code>`).join('\n');
+  ctx.send(`📋 <b>Danh sách người có quyền order:</b>\n\n${list}\n\nDùng /xoa_quyen [user_id] để xóa quyền.`);
+}
+
+function cmdMyId(ctx) {
+  ctx.send(`🆔 Telegram User ID của bạn: <code>${ctx.user.id}</code>\n\nCopy số này và gửi cho admin để được cấp quyền order.`);
+}
+
 // ── HELPERS ───────────────────────────────────────────────────
 function buildProductKeyboard(orderId, designerId, products, currentItems) {
   const rows = products.map(p => {
@@ -447,6 +501,7 @@ function parseContent(text) {
 module.exports = {
   cmdHelp, cmdOrder, cmdDone, cmdPublish, cmdAddProduct, cmdUpdatePrice,
   cmdDeleteProduct, cmdListProducts, cmdMyOrders, cmdOrderInfo,
+  cmdAddPermission, cmdRemovePermission, cmdListPermissions, cmdMyId,
   cbAccept, cbInfo, cbConfirmPublish, cbAddProduct, cbDoneProducts, cbCancelProducts,
   handlePendingFlow,
 };
