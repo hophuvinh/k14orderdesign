@@ -11,35 +11,49 @@ const handlers    = require('./handlers');
   if (!process.env[k]) { console.error(`❌ Thiếu ${k} trong environment variables!`); process.exit(1); }
 });
 
+// ── CHỐNG CRASH ──────────────────────────────────────────────
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ Unhandled Rejection:', JSON.stringify(reason, null, 2) || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ Uncaught Exception:', err.message, err.stack);
+});
+
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 console.log('🤖 Design Order Bot đang chạy...');
+console.log('📌 GROUP_DESIGN_ID:', process.env.GROUP_DESIGN_ID);
+console.log('📌 ADMIN_IDS:', process.env.ADMIN_IDS);
 
 // ── ROUTE TIN NHẮN ────────────────────────────────────────────
 bot.on('message', async (msg) => {
   if (!msg.text) return;
   const text = msg.text.trim();
   const ctx  = buildCtx(bot, msg);
+
+  // Debug log — xem bot có nhận được tin nhắn không
+  console.log(`📩 [${msg.chat.type}] chatId=${msg.chat.id} from=${msg.from.id} text="${text.substring(0,50)}"`);
+
   try {
     if (await handlers.handlePendingFlow(ctx, text)) return;
     const cmd = text.split(/\s+/)[0].toLowerCase().replace(/@\w+/, '');
     switch (cmd) {
-      case '/order':      handlers.cmdOrder(ctx, text); break;
-      case '/xong':       handlers.cmdDone(ctx, text); break;
+      case '/order':      await handlers.cmdOrder(ctx, text); break;
+      case '/xong':       await handlers.cmdDone(ctx, text); break;
       case '/publish':
-      case '/xacnhan':    handlers.cmdPublish(ctx, text); break;
-      case '/them_sp':    handlers.cmdAddProduct(ctx, text); break;
-      case '/sua_gia':    handlers.cmdUpdatePrice(ctx, text); break;
-      case '/xoa_sp':     handlers.cmdDeleteProduct(ctx, text); break;
+      case '/xacnhan':    await handlers.cmdPublish(ctx, text); break;
+      case '/them_sp':    await handlers.cmdAddProduct(ctx, text); break;
+      case '/sua_gia':    await handlers.cmdUpdatePrice(ctx, text); break;
+      case '/xoa_sp':     await handlers.cmdDeleteProduct(ctx, text); break;
       case '/san_pham':
-      case '/gia':        handlers.cmdListProducts(ctx); break;
-      case '/mytasks':    handlers.cmdMyOrders(ctx); break;
-      case '/order_info': handlers.cmdOrderInfo(ctx, text); break;
+      case '/gia':        await handlers.cmdListProducts(ctx); break;
+      case '/mytasks':    await handlers.cmdMyOrders(ctx); break;
+      case '/order_info': await handlers.cmdOrderInfo(ctx, text); break;
       case '/start':
       case '/help':       handlers.cmdHelp(ctx); break;
     }
   } catch (err) {
-    console.error('Message handler error:', err);
-    ctx.send('⚠️ Có lỗi xảy ra, thử lại sau.');
+    console.error('❌ Message handler error:', JSON.stringify(err, null, 2) || err.message || err);
+    try { ctx.send('⚠️ Có lỗi xảy ra, thử lại sau.'); } catch {}
   }
 });
 
@@ -47,18 +61,19 @@ bot.on('message', async (msg) => {
 bot.on('callback_query', async (q) => {
   const ctx = buildCtxCB(bot, q);
   const [action, ...args] = q.data.split(':');
+  console.log(`🔘 Callback: action=${action} args=${args.join(',')} from=${q.from.id}`);
   try {
     switch (action) {
-      case 'ACCEPT':          handlers.cbAccept(ctx, q, args[0]); break;
-      case 'INFO':            handlers.cbInfo(ctx, q, args[0]); break;
-      case 'CONFIRM_PUBLISH': handlers.cbConfirmPublish(ctx, q, args[0]); break;
-      case 'ADD_SP':          handlers.cbAddProduct(ctx, q, args[0], args[1], args[2]); break;
-      case 'DONE_SP':         handlers.cbDoneProducts(ctx, q, args[0], args[1]); break;
-      case 'CANCEL_SP':       handlers.cbCancelProducts(ctx, q, args[0]); break;
+      case 'ACCEPT':          await handlers.cbAccept(ctx, q, args[0]); break;
+      case 'INFO':            await handlers.cbInfo(ctx, q, args[0]); break;
+      case 'CONFIRM_PUBLISH': await handlers.cbConfirmPublish(ctx, q, args[0]); break;
+      case 'ADD_SP':          await handlers.cbAddProduct(ctx, q, args[0], args[1], args[2]); break;
+      case 'DONE_SP':         await handlers.cbDoneProducts(ctx, q, args[0], args[1]); break;
+      case 'CANCEL_SP':       await handlers.cbCancelProducts(ctx, q, args[0]); break;
       default: bot.answerCallbackQuery(q.id); break;
     }
   } catch (err) {
-    console.error('Callback error:', err);
+    console.error('❌ Callback error:', err);
     bot.answerCallbackQuery(q.id, { text: '⚠️ Lỗi, thử lại sau.', show_alert: true });
   }
 });
